@@ -20,7 +20,7 @@ namespace PB.Cartao.Presentation.Controllers
             
         }
 
-        [HttpGet("{idCliente}")]
+        [HttpGet("{id}")]
         [ProducesResponseType(typeof(CartaoResponse), (int)HttpStatusCode.OK)]
         [ProducesResponseType((int)HttpStatusCode.NotFound)]
         public async Task<IActionResult> ObterCartaoPorIdCliente (Guid id)
