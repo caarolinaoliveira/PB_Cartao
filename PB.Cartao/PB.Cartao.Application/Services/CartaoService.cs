@@ -5,7 +5,7 @@ using PB.Cartao.Domain.Entities;
 using PB.Cartao.Domain.Interfaces;
 using PB.Cartao.Domain.Exceptions;
 using Polly.CircuitBreaker;
-using Polly;
+using Microsoft.Extensions.Logging;
 
 namespace PB.Cartao.Application.Services
 {
@@ -14,36 +14,35 @@ namespace PB.Cartao.Application.Services
         private readonly ICartaoRepository _cartaoRepository;
         private readonly IMessagePublisher _messagePublisher;
         private readonly IEmailService _emailService;
-
-        private static readonly AsyncCircuitBreakerPolicy _circuitBreaker = Policy
-            .Handle<Exception>(ex => ex is not ConflictException && ex is not NotFoundException)
-            .CircuitBreakerAsync(
-                exceptionsAllowedBeforeBreaking: 3,
-                durationOfBreak: TimeSpan.FromSeconds(30),
-                onBreak: (ex, duration) =>
-                    Console.WriteLine($"[CIRCUIT BREAKER] Aberto por {duration.TotalSeconds}s"),
-                onReset: () =>
-                    Console.WriteLine("[CIRCUIT BREAKER] Fechado — retomando operacao"),
-                onHalfOpen: () =>
-                    Console.WriteLine("[CIRCUIT BREAKER] Half-open — testando"));
+        private readonly AsyncCircuitBreakerPolicy _circuitBreaker;
+        private readonly ILogger<CartaoService> _logger;
 
         public CartaoService(
             ICartaoRepository cartaoRepository,
             IMessagePublisher messagePublisher,
-            IEmailService emailService)
+            IEmailService emailService,
+            AsyncCircuitBreakerPolicy circuitBreaker,
+            ILogger<CartaoService> logger)
         {
             _cartaoRepository = cartaoRepository;
             _messagePublisher = messagePublisher;
             _emailService = emailService;
+            _circuitBreaker = circuitBreaker;
+            _logger = logger;
         }
 
         public async Task ProcessarAsync(CreditoAprovadoEvent evento)
         {
+            _logger.LogInformation("Processando evento de crédito aprovado para cliente {ClienteId} com proposta {PropostaId}", evento.ClienteId, evento.PropostaId);
+
             var cartoesExistentes = await _cartaoRepository
                 .ObterPorClienteIdAsync(evento.ClienteId);
                 
             if (cartoesExistentes.Count >= evento.QuantidadeCartoes)
-                throw new ConflictException("Quantidade de cartoes ja emitidos e igual ou superior a quantidade aprovada.");
+            {
+                _logger.LogWarning("[CARTAO] Já processado — ignorando | ClienteId: {Id}", evento.ClienteId);
+                return;
+            }
 
             for (int i = cartoesExistentes.Count + 1; i <= evento.QuantidadeCartoes; i++)
             {
@@ -62,6 +61,7 @@ namespace PB.Cartao.Application.Services
                     numeroCartao: i,
                     cartao.Limite
                 );
+                _logger.LogInformation("[CARTAO] Emitido cartão {Seq}/{Total} | ClienteId: {Id}", i, evento.QuantidadeCartoes, evento.ClienteId);
 
                 var cartaoEmitido = new CartaoEmitidoEvent
                 {
@@ -75,9 +75,7 @@ namespace PB.Cartao.Application.Services
                     OcorridoEm = DateTime.UtcNow
                 };
 
-                await _circuitBreaker.ExecuteAsync(async () =>
-                    await _messagePublisher.PublicarAsync(cartaoEmitido, "cartao.emitido")
-                );
+                await _circuitBreaker.ExecuteAsync(() => _messagePublisher.PublicarAsync(cartaoEmitido, "cartao.emitido"));
             }
         }
 

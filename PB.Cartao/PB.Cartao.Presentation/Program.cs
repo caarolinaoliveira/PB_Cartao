@@ -7,6 +7,8 @@ using PB.Cartao.Infrastructure.Context;
 using PB.Cartao.Infrastructure.Messaging;
 using PB.Cartao.Infrastructure.Repository;
 using PB.Cartao.Infrastructure.Services;
+using Polly.CircuitBreaker;
+using Polly;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,6 +36,26 @@ builder.Services.AddScoped<ICartaoRepository, CartaoRepository>();
 builder.Services.AddScoped<ICartaoService, CartaoService>();
 builder.Services.AddScoped<IMessagePublisher, RabbitMQPublisher>();
 builder.Services.AddScoped<IEmailService, EmailService>();
+
+
+builder.Services.AddSingleton<AsyncCircuitBreakerPolicy>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<CartaoService>>();
+
+    return Policy
+        .Handle<Exception>()
+        .CircuitBreakerAsync(
+            exceptionsAllowedBeforeBreaking: 3,
+            durationOfBreak: TimeSpan.FromSeconds(30),
+            onBreak: (ex, duration) =>
+                logger.LogError("[CIRCUIT BREAKER] Aberto por {Segundos}s. Erro: {Msg}",
+                    duration.TotalSeconds, ex.Message),
+            onReset: () =>
+                logger.LogInformation("[CIRCUIT BREAKER] Fechado — retomando"),
+            onHalfOpen: () =>
+                logger.LogInformation("[CIRCUIT BREAKER] Half-open — testando")
+        );
+});
 
 builder.Services.AddHostedService<RabbitMQConsumer>();
 
