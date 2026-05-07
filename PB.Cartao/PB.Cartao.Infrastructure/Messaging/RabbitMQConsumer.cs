@@ -16,19 +16,22 @@ namespace PB.Cartao.Infrastructure.Messaging
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<RabbitMQConsumer> _logger;
         private readonly IConnection _connection;
+        private readonly AsyncCircuitBreakerPolicy _circuitBreaker;
         private IModel? _channel;
 
         public RabbitMQConsumer(
             IServiceScopeFactory scopeFactory,
             ILogger<RabbitMQConsumer> logger,
-            IConnection connection)
+            IConnection connection,
+            AsyncCircuitBreakerPolicy circuitBreaker)
         {
             _scopeFactory = scopeFactory;
             _logger = logger;
             _connection = connection;
+            _circuitBreaker = circuitBreaker;
         }
 
-        protected override Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _channel = _connection.CreateModel();
 
@@ -40,6 +43,7 @@ namespace PB.Cartao.Infrastructure.Messaging
                 exclusive: false,
                 autoDelete: false
             );
+            _channel.QueueBind("credito.aprovado.dlq", "dlx.cartao", "credito.aprovado");
 
             var args = new Dictionary<string, object>
             {
@@ -55,8 +59,6 @@ namespace PB.Cartao.Infrastructure.Messaging
                 arguments: args
             );
 
-            _channel.QueueBind("credito.aprovado.dlq", "dlx.cartao", "credito.aprovado");
-
             _channel.QueueDeclare(
                 queue: "cartao.emitido",
                 durable: true,
@@ -70,6 +72,13 @@ namespace PB.Cartao.Infrastructure.Messaging
 
             consumer.Received += async (sender, ea) =>
             {
+                if (_circuitBreaker.CircuitState == CircuitState.Open)
+                {
+                    _logger.LogWarning("[CONSUMER] Circuito aberto — reenfileirando mensagem.");
+                    _channel!.BasicNack(ea.DeliveryTag, false, requeue: true);
+                    return;
+                }
+
                 var json = Encoding.UTF8.GetString(ea.Body.ToArray());
                 var tentativas = 0;
 
@@ -90,7 +99,7 @@ namespace PB.Cartao.Infrastructure.Messaging
                     if (evento is null)
                     {
                         _logger.LogWarning("[CONSUMER] Evento null — descartando.");
-                        _channel.BasicNack(ea.DeliveryTag, false, requeue: false);
+                        _channel!.BasicNack(ea.DeliveryTag, false, requeue: false);
                         return;
                     }
 
@@ -100,8 +109,7 @@ namespace PB.Cartao.Infrastructure.Messaging
 
                     await cartaoService.ProcessarAsync(evento);
 
-                    _channel.BasicAck(ea.DeliveryTag, false);
-
+                    _channel!.BasicAck(ea.DeliveryTag, false);
                     _logger.LogInformation(
                         "[CONSUMER] Cartao(s) emitido(s) com sucesso | ClienteId: {ClienteId}",
                         evento.ClienteId);
@@ -109,7 +117,7 @@ namespace PB.Cartao.Infrastructure.Messaging
                 catch (BrokenCircuitException ex)
                 {
                     _logger.LogError(ex, "[CONSUMER] Circuit Breaker aberto — descartando para DLQ.");
-                    _channel.BasicNack(ea.DeliveryTag, false, requeue: false);
+                    _channel!.BasicNack(ea.DeliveryTag, false, requeue: false);
                 }
                 catch (Exception ex)
                 {
@@ -118,13 +126,13 @@ namespace PB.Cartao.Infrastructure.Messaging
                     if (tentativas >= 3)
                     {
                         _logger.LogError(ex, "[CONSUMER] Maximo de tentativas atingido — enviando para DLQ.");
-                        _channel.BasicNack(ea.DeliveryTag, false, requeue: false);
+                        _channel!.BasicNack(ea.DeliveryTag, false, requeue: false);
                         return;
                     }
 
                     _logger.LogWarning("[CONSUMER] Tentativa {N} falhou — reenfileirando.", tentativas);
 
-                    var props = _channel.CreateBasicProperties();
+                    var props = _channel!.CreateBasicProperties();
                     props.Persistent = true;
                     props.Headers = new Dictionary<string, object>
                     {
@@ -145,7 +153,7 @@ namespace PB.Cartao.Infrastructure.Messaging
 
             _logger.LogInformation("[CONSUMER] Aguardando mensagens na fila credito.aprovado...");
 
-            return Task.CompletedTask;
+            await Task.Delay(Timeout.Infinite, stoppingToken);
         }
 
         public override void Dispose()
