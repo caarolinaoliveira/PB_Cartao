@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using PB.Cartao.Application.Interfaces;
+using PB.Cartao.Domain.Exceptions;
 using RabbitMQ.Client;
 
 namespace PB.Cartao.Infrastructure.Messaging
@@ -18,6 +19,7 @@ namespace PB.Cartao.Infrastructure.Messaging
         {
             using var channel = _connection.CreateModel();
 
+            channel.QueueDeclarePassive(fila);
             channel.ConfirmSelect();
 
             var json = JsonSerializer.Serialize(evento);
@@ -26,16 +28,26 @@ namespace PB.Cartao.Infrastructure.Messaging
             var props = channel.CreateBasicProperties();
             props.Persistent = true;
 
-            channel.BasicPublish(
-                exchange: "",
-                routingKey: fila,
-                basicProperties: props,
-                body: body
-            );
+            try
+            {
+                channel.BasicPublish(
+                    exchange: "",
+                    routingKey: fila,
+                    basicProperties: props,
+                    body: body
+                );
 
-            var confirmado = channel.WaitForConfirms(timeout: TimeSpan.FromSeconds(5));
-            if (!confirmado)
-                throw new Exception("Falha ao publicar mensagem no RabbitMQ.");
+                if (!channel.WaitForConfirms(timeout: TimeSpan.FromSeconds(5)))
+                    throw new MessagePublishException($"Mensagem não confirmada pelo broker. Fila: '{fila}'.");
+            }
+            catch (MessagePublishException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new MessagePublishException($"Falha ao publicar na fila '{fila}'.", ex);
+            }
 
             return Task.CompletedTask;
         }
