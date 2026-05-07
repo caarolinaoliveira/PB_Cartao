@@ -84,8 +84,10 @@ No arquivo `PB.Cartao/appsettings.json`, configure as credenciais de acordo com 
 
 ```bash
 cd PB.Cartao
-dotnet ef migrations add InitialCreate --project PB.Cartao.Infrastructure --startup-project .
-dotnet ef database update --project PB.Cartao.Infrastructure --startup-project .
+
+dotnet ef migrations add InitialCreate --project PB.Cartao.Infrastructure  --startup-project PB.Cartao.Presentation --context CartaoDbContext
+
+dotnet ef database update --project PB.Cartao.Infrastructure  --startup-project PB.Cartao.Presentation  --context PBCartaoDbContext
 ```
 
 > A migration também é aplicada automaticamente na inicialização via `MigrateAsync()` 
