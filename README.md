@@ -4,22 +4,21 @@ Microsserviço responsável pela emissão de cartões de crédito. Consome o eve
 
 ## Tecnologias
 
-- .NET 8
+- .NET 10
 - ASP.NET Core Web API + BackgroundService
 - Entity Framework Core + SQL Server
 - RabbitMQ.Client 6.8.1
 - Clean Architecture + DDD
 
 ## Estrutura
-
 ```
 PB.Cartao/
-  PB.Cartao.Domain/          # Entidades, interfaces
-  PB.Cartao.Application/     # Services, interfaces, eventos
-  PB.Cartao.Infrastructure/  # EF Core, repositórios, RabbitMQ, e-mail
-  Program.cs                 # Entry point, DI, migration automática
+  PB.Cartao.Domain/                    # Entidades, interfaces
+  PB.Cartao.Application/               # Services, interfaces, eventos
+  PB.Cartao.Infrastructure/            # EF Core, repositórios, RabbitMQ
+  PB.Cartao.Presentation/              # Controllers, middlewares, Program.cs
   Testes/
-    PB.Cartao.Application.Tests/  # Testes unitários com xUnit
+    PB.Cartao.Application.Tests/       # Testes unitários com xUnit
 ```
 
 ## Regras de emissão
@@ -33,7 +32,7 @@ PB.Cartao/
 
 ## Pré-requisitos
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - MS Cliente e MS Proposta rodando
 
@@ -89,7 +88,7 @@ dotnet ef migrations add InitialCreate --project PB.Cartao.Infrastructure --star
 dotnet ef database update --project PB.Cartao.Infrastructure --startup-project .
 ```
 
-> A migration também é aplicada automaticamente na inicialização via `MigrateAsync()` — em desenvolvimento não é necessário rodar manualmente.
+> A migration também é aplicada automaticamente na inicialização via `MigrateAsync()` 
 
 ### 4. Rodar o serviço
 
@@ -107,7 +106,7 @@ O consumer ficará aguardando mensagens na fila `credito.aprovado`:
 A API estará disponível para consulta de cartões em:
 
 ```
-GET http://localhost:{porta}/api/cartoes/{clienteId}
+http://localhost:5102/swagger/index.html
 ```
 
 ## Infraestrutura Docker
