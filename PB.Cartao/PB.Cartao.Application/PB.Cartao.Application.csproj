@@ -4,8 +4,12 @@
     <ProjectReference Include="..\PB.Cartao.Domain\PB.Cartao.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Polly" Version="8.6.6" />
+  </ItemGroup>
+
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>

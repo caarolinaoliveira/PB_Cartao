@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using PB.Cartao.Application.Events;
 using PB.Cartao.Application.Interfaces;
+using Polly.CircuitBreaker;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -31,8 +32,33 @@ namespace PB.Cartao.Infrastructure.Messaging
         {
             _channel = _connection.CreateModel();
 
+            _channel.ExchangeDeclare("dlx.cartao", ExchangeType.Direct, durable: true);
+
+            _channel.QueueDeclare(
+                queue: "credito.aprovado.dlq",
+                durable: true,
+                exclusive: false,
+                autoDelete: false
+            );
+
+            var args = new Dictionary<string, object>
+            {
+                { "x-dead-letter-exchange", "dlx.cartao" },
+                { "x-dead-letter-routing-key", "credito.aprovado" }
+            };
+
             _channel.QueueDeclare(
                 queue: "credito.aprovado",
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: args
+            );
+
+            _channel.QueueBind("credito.aprovado.dlq", "dlx.cartao", "credito.aprovado");
+
+            _channel.QueueDeclare(
+                queue: "cartao.emitido",
                 durable: true,
                 exclusive: false,
                 autoDelete: false
@@ -45,6 +71,13 @@ namespace PB.Cartao.Infrastructure.Messaging
             consumer.Received += async (sender, ea) =>
             {
                 var json = Encoding.UTF8.GetString(ea.Body.ToArray());
+                var tentativas = 0;
+
+                if (ea.BasicProperties.Headers != null &&
+                    ea.BasicProperties.Headers.TryGetValue("x-retry-count", out var retryObj))
+                {
+                    tentativas = Convert.ToInt32(retryObj);
+                }
 
                 _logger.LogInformation(
                     "[CONSUMER] Mensagem recebida na fila credito.aprovado: {Json}", json);
@@ -70,15 +103,38 @@ namespace PB.Cartao.Infrastructure.Messaging
                     _channel.BasicAck(ea.DeliveryTag, false);
 
                     _logger.LogInformation(
-                        "[CONSUMER] Cartão(s) emitido(s) com sucesso | ClienteId: {ClienteId}",
+                        "[CONSUMER] Cartao(s) emitido(s) com sucesso | ClienteId: {ClienteId}",
                         evento.ClienteId);
+                }
+                catch (BrokenCircuitException ex)
+                {
+                    _logger.LogError(ex, "[CONSUMER] Circuit Breaker aberto — descartando para DLQ.");
+                    _channel.BasicNack(ea.DeliveryTag, false, requeue: false);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex,
-                        "[CONSUMER] Erro ao processar mensagem — reenfileirando.");
+                    tentativas++;
 
-                    _channel.BasicNack(ea.DeliveryTag, false, requeue: true);
+                    if (tentativas >= 3)
+                    {
+                        _logger.LogError(ex, "[CONSUMER] Maximo de tentativas atingido — enviando para DLQ.");
+                        _channel.BasicNack(ea.DeliveryTag, false, requeue: false);
+                        return;
+                    }
+
+                    _logger.LogWarning("[CONSUMER] Tentativa {N} falhou — reenfileirando.", tentativas);
+
+                    var props = _channel.CreateBasicProperties();
+                    props.Persistent = true;
+                    props.Headers = new Dictionary<string, object>
+                    {
+                        { "x-retry-count", tentativas }
+                    };
+
+                    await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, tentativas)));
+
+                    _channel.BasicPublish("", "credito.aprovado", props, ea.Body);
+                    _channel.BasicAck(ea.DeliveryTag, false);
                 }
             };
 

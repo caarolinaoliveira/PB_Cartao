@@ -14,16 +14,11 @@ namespace PB.Cartao.Infrastructure.Messaging
             _connection = connection;
         }
 
-        public async Task PublicarAsync<T>(T evento, string fila) where T : class
+        public Task PublicarAsync<T>(T evento, string fila) where T : class
         {
             using var channel = _connection.CreateModel();
 
-            channel.QueueDeclare(
-                queue: fila,
-                durable: true,
-                exclusive: false,
-                autoDelete: false
-            );
+            channel.ConfirmSelect();
 
             var json = JsonSerializer.Serialize(evento);
             var body = Encoding.UTF8.GetBytes(json);
@@ -38,7 +33,11 @@ namespace PB.Cartao.Infrastructure.Messaging
                 body: body
             );
 
-            await Task.CompletedTask;
+            var confirmado = channel.WaitForConfirms(timeout: TimeSpan.FromSeconds(5));
+            if (!confirmado)
+                throw new Exception("Falha ao publicar mensagem no RabbitMQ.");
+
+            return Task.CompletedTask;
         }
     }
 }

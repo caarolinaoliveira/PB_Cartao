@@ -4,6 +4,8 @@ using PB.Cartao.Application.Response;
 using PB.Cartao.Domain.Entities;
 using PB.Cartao.Domain.Interfaces;
 using PB.Cartao.Domain.Exceptions;
+using Polly.CircuitBreaker;
+using Polly;
 
 namespace PB.Cartao.Application.Services
 {
@@ -12,6 +14,19 @@ namespace PB.Cartao.Application.Services
         private readonly ICartaoRepository _cartaoRepository;
         private readonly IMessagePublisher _messagePublisher;
         private readonly IEmailService _emailService;
+
+        private static readonly AsyncCircuitBreakerPolicy _circuitBreaker = Policy
+            .Handle<Exception>()
+            .CircuitBreakerAsync(
+                exceptionsAllowedBeforeBreaking: 3,
+                durationOfBreak: TimeSpan.FromSeconds(30),
+                onBreak: (ex, duration) =>
+                    Console.WriteLine($"[CIRCUIT BREAKER] Aberto por {duration.TotalSeconds}s"),
+                onReset: () =>
+                    Console.WriteLine("[CIRCUIT BREAKER] Fechado — retomando operacao"),
+                onHalfOpen: () =>
+                    Console.WriteLine("[CIRCUIT BREAKER] Half-open — testando")
+            );
 
         public CartaoService(
             ICartaoRepository cartaoRepository,
@@ -27,9 +42,13 @@ namespace PB.Cartao.Application.Services
         {
             var cartoesExistentes = await _cartaoRepository
                 .ObterPorClienteIdAsync(evento.ClienteId);
-
+            
+     
+            if (cartoesExistentes == null || !cartoesExistentes.Any())
+                throw new NotFoundException($"Nenhum cartão encontrado para o cliente {evento.ClienteId}.");
+                
             if (cartoesExistentes.Count >= evento.QuantidadeCartoes)
-                throw new ConflictException("Quantidade de cartões já emitidos é igual ou superior à quantidade aprovada.");
+                throw new ConflictException("Quantidade de cartoes ja emitidos e igual ou superior a quantidade aprovada.");
 
             for (int i = cartoesExistentes.Count + 1; i <= evento.QuantidadeCartoes; i++)
             {
@@ -61,9 +80,10 @@ namespace PB.Cartao.Application.Services
                     OcorridoEm = DateTime.UtcNow
                 };
 
-                await _messagePublisher.PublicarAsync(cartaoEmitido, "cartao.emitido");
+                await _circuitBreaker.ExecuteAsync(async () =>
+                    await _messagePublisher.PublicarAsync(cartaoEmitido, "cartao.emitido")
+                );
             }
-
         }
 
         public async Task<List<CartaoResponse>> BuscarCartaoPorIdCliente(Guid clienteId)
@@ -71,7 +91,7 @@ namespace PB.Cartao.Application.Services
             var cartoes = await _cartaoRepository.ObterPorClienteIdAsync(clienteId);
 
             if (cartoes == null || !cartoes.Any())
-                throw new NotFoundException("Nenhum cartão encontrado para o cliente.");
+                throw new NotFoundException("Nenhum cartao encontrado para o cliente.");
 
             return cartoes.Select(cartao => new CartaoResponse
             {
