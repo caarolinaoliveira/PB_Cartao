@@ -16,7 +16,7 @@ namespace PB.Cartao.Application.Services
         private readonly IEmailService _emailService;
 
         private static readonly AsyncCircuitBreakerPolicy _circuitBreaker = Policy
-            .Handle<Exception>()
+            .Handle<Exception>(ex => ex is not ConflictException && ex is not NotFoundException)
             .CircuitBreakerAsync(
                 exceptionsAllowedBeforeBreaking: 3,
                 durationOfBreak: TimeSpan.FromSeconds(30),
@@ -25,8 +25,7 @@ namespace PB.Cartao.Application.Services
                 onReset: () =>
                     Console.WriteLine("[CIRCUIT BREAKER] Fechado — retomando operacao"),
                 onHalfOpen: () =>
-                    Console.WriteLine("[CIRCUIT BREAKER] Half-open — testando")
-            );
+                    Console.WriteLine("[CIRCUIT BREAKER] Half-open — testando"));
 
         public CartaoService(
             ICartaoRepository cartaoRepository,
@@ -42,10 +41,6 @@ namespace PB.Cartao.Application.Services
         {
             var cartoesExistentes = await _cartaoRepository
                 .ObterPorClienteIdAsync(evento.ClienteId);
-            
-     
-            if (cartoesExistentes == null || !cartoesExistentes.Any())
-                throw new NotFoundException($"Nenhum cartão encontrado para o cliente {evento.ClienteId}.");
                 
             if (cartoesExistentes.Count >= evento.QuantidadeCartoes)
                 throw new ConflictException("Quantidade de cartoes ja emitidos e igual ou superior a quantidade aprovada.");
