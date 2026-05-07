@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/Testes/">
+    <Project Path="Testes/PB.Cartao.Application.Tests/PB.Cartao.Application.Tests.csproj" />
+  </Folder>
+  <Project Path="PB.Cartao.Application/PB.Cartao.Application.csproj" />
+  <Project Path="PB.Cartao.Domain/PB.Cartao.Domain.csproj" />
+  <Project Path="PB.Cartao.Infrastructure/PB.Cartao.Infrastructure.csproj" />
+  <Project Path="PB.Cartao.Presentation/PB.Cartao.Presentation.csproj" />
+</Solution>
