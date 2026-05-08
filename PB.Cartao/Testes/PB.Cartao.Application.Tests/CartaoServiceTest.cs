@@ -5,7 +5,9 @@ using PB.Cartao.Domain.Interfaces;
 using PB.Cartao.Domain.Entities;
 using PB.Cartao.Domain.Exceptions;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Moq;
+using Polly;
 using Xunit;
 
 namespace PB.Cartao.Application.Tests;
@@ -22,10 +24,22 @@ public class CartaoServiceTests
         _repositoryMock = new Mock<ICartaoRepository>();
         _publisherMock = new Mock<IMessagePublisher>();
         _emailServiceMock = new Mock<IEmailService>();
+
+        var circuitBreaker = Policy
+            .Handle<Exception>()
+            .CircuitBreakerAsync(
+                exceptionsAllowedBeforeBreaking: 999,
+                durationOfBreak: TimeSpan.FromSeconds(1)
+            );
+
+        var logger = new Mock<ILogger<CartaoService>>().Object;
+
         _service = new CartaoService(
             _repositoryMock.Object,
             _publisherMock.Object,
-            _emailServiceMock.Object);
+            _emailServiceMock.Object,
+            circuitBreaker,
+            logger);
     }
 
     private CreditoAprovadoEvent CriarEventoPadrao(int quantidadeCartoes = 1, decimal limite = 1000m) => new()
@@ -41,8 +55,6 @@ public class CartaoServiceTests
 
     private CartaoEntity CriarCartao(Guid clienteId, Guid propostaId, int sequencial = 1) =>
         new CartaoEntity(clienteId, propostaId, 1000m, sequencial);
-
-
 
     [Fact]
     public async Task ProcessarAsync_UmCartaoAprovado_DeveEmitirUmCartao()
@@ -88,24 +100,21 @@ public class CartaoServiceTests
         // Act
         await _service.ProcessarAsync(evento);
 
-        // Assert — persistiu 2 vezes
+        // Assert
         _repositoryMock.Verify(r => r.AdicionarAsync(It.IsAny<CartaoEntity>()), Times.Exactly(2));
 
-        // enviou email para cartão #1 e #2
         _emailServiceMock.Verify(e => e.EnviarCartaoEmitidoAsync(
             evento.Email, evento.Nome, 1, evento.LimiteAprovado), Times.Once);
 
         _emailServiceMock.Verify(e => e.EnviarCartaoEmitidoAsync(
             evento.Email, evento.Nome, 2, evento.LimiteAprovado), Times.Once);
 
-        // publicou evento 2 vezes
         _publisherMock.Verify(p => p.PublicarAsync(
             It.IsAny<CartaoEmitidoEvent>(), "cartao.emitido"), Times.Exactly(2));
     }
 
-
     [Fact]
-    public async Task ProcessarAsync_CartoesJaEmitidos_DeveLancarConflictException()
+    public async Task ProcessarAsync_CartoesJaEmitidos_DeveIgnorar()
     {
         // Arrange
         var evento = CriarEventoPadrao(quantidadeCartoes: 1);
@@ -117,12 +126,9 @@ public class CartaoServiceTests
             .ReturnsAsync(new List<CartaoEntity> { cartaoJaEmitido });
 
         // Act
-        Func<Task> act = async () => await _service.ProcessarAsync(evento);
+        await _service.ProcessarAsync(evento);
 
         // Assert
-        await act.Should().ThrowAsync<ConflictException>()
-            .WithMessage("Quantidade de cartões já emitidos é igual ou superior à quantidade aprovada.");
-
         _repositoryMock.Verify(r => r.AdicionarAsync(It.IsAny<CartaoEntity>()), Times.Never);
         _emailServiceMock.Verify(e => e.EnviarCartaoEmitidoAsync(
             It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<decimal>()), Times.Never);
